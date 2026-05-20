@@ -13,5 +13,5 @@ data:
   # GitHub Storage Repo — used by GitService inside Spring Boot
   # to trigger the file-storage workflow via repository_dispatch.
   # Set GITHUB_TOKEN as a Kubernetes Secret, not here.
-  GITHUB_STORAGE_REPO_OWNER: "your-github-username"
-  GITHUB_STORAGE_REPO_NAME: "your-private-storage-repo"
+  GITHUB_STORAGE_REPO_OWNER: "punitkumar4871"
+  GITHUB_STORAGE_REPO_NAME: "upload-file-storage"

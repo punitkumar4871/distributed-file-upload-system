@@ -24,7 +24,7 @@ spec:
       containers:
         - name: upload-system
           # IMAGE_TAG_PLACEHOLDER is replaced by the CI/CD pipeline (sed in ci-cd.yml)
-          image: YOUR_DOCKERHUB_USERNAME/distributed-upload-system:IMAGE_TAG_PLACEHOLDER
+          image: punitkumar4871/distributed-upload-system:IMAGE_TAG_PLACEHOLDER
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
