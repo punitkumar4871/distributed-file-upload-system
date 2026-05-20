@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: upload-system-svc
+  namespace: upload-system
+  labels:
+    app: upload-system
+spec:
+  selector:
+    app: upload-system
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80          # External port clients hit
+      targetPort: 8080  # Spring Boot's port inside the container
+  type: LoadBalancer    # Change to ClusterIP if using an Ingress controller

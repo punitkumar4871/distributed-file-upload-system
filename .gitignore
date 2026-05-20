@@ -1,0 +1,8 @@
+target/
+uploads/
+*.jar
+*.class
+.idea/
+*.iml
+.DS_Store
+k8s/secret.yml          # Never commit real secrets

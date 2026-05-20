@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upload-system
+  namespace: upload-system
+  labels:
+    app: upload-system
+spec:
+  replicas: 2                   # Run 2 pods for basic HA
+  selector:
+    matchLabels:
+      app: upload-system
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1               # Allow 1 extra pod during update
+      maxUnavailable: 0         # Never take a pod down before a new one is ready
+
+  template:
+    metadata:
+      labels:
+        app: upload-system
+    spec:
+      containers:
+        - name: upload-system
+          # IMAGE_TAG_PLACEHOLDER is replaced by the CI/CD pipeline (sed in ci-cd.yml)
+          image: YOUR_DOCKERHUB_USERNAME/distributed-upload-system:IMAGE_TAG_PLACEHOLDER
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+
+          # Inject ConfigMap values as env variables
+          envFrom:
+            - configMapRef:
+                name: upload-system-config
+
+          # Inject secrets (GitHub token, etc.)
+          env:
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: upload-system-secrets
+                  key: GITHUB_TOKEN
+
+          # Resource limits — tune for your cluster
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          # Liveness: restart pod if /api/health stops responding
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+
+          # Readiness: don't send traffic until Spring Boot is up
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # Mount shared volume for uploaded files
+          volumeMounts:
+            - name: uploads-volume
+              mountPath: /mnt/uploads
+
+      volumes:
+        # PersistentVolumeClaim — shared across all replicas so chunks
+        # written by one pod are visible to the pod that does the merge.
+        - name: uploads-volume
+          persistentVolumeClaim:
+            claimName: uploads-pvc
+
+---
+# PersistentVolumeClaim — shared storage for uploaded chunks & final files.
+# Using ReadWriteMany so multiple replicas can write simultaneously.
+# Requires a storage class that supports RWX (e.g., NFS, Longhorn, EFS).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uploads-pvc
+  namespace: upload-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: "your-rwx-storage-class"   # uncomment and set for your cluster

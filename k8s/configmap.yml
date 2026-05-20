@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: upload-system-config
+  namespace: upload-system
+data:
+  # These override application.properties values at runtime.
+  # Change paths to match your PersistentVolume mount points.
+  UPLOAD_TEMP_DIR: "/mnt/uploads/temp"
+  UPLOAD_FINAL_DIR: "/mnt/uploads/final"
+  SERVER_PORT: "8080"
+
+  # GitHub Storage Repo — used by GitService inside Spring Boot
+  # to trigger the file-storage workflow via repository_dispatch.
+  # Set GITHUB_TOKEN as a Kubernetes Secret, not here.
+  GITHUB_STORAGE_REPO_OWNER: "your-github-username"
+  GITHUB_STORAGE_REPO_NAME: "your-private-storage-repo"

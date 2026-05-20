@@ -1,0 +1,83 @@
+name: File-to-GitHub Storage Pipeline
+
+# This workflow is triggered by the Spring Boot backend via a repository_dispatch event
+# when a file has been fully assembled (all chunks merged).
+#
+# The backend calls GitHub's API:
+#   POST /repos/<owner>/<repo>/dispatches
+#   { "event_type": "file-uploaded", "client_payload": { "fileName": "...", "filePath": "..." } }
+
+on:
+  repository_dispatch:
+    types: [ file-uploaded ]
+
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      fileName:
+        description: 'Name of the file to commit'
+        required: true
+
+jobs:
+  save-file-to-storage-repo:
+    name: Commit Uploaded File to Storage Repo
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract payload
+        id: payload
+        run: |
+          FILE_NAME="${{ github.event.client_payload.fileName || github.event.inputs.fileName }}"
+          echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
+          echo "Processing file: $FILE_NAME"
+
+      # This step runs on a self-hosted runner that has access to the upload server's filesystem.
+      # On a cloud deployment, this step downloads from an intermediate storage (e.g., S3 / local volume).
+      - name: Download merged file from upload server
+        run: |
+          FILE_NAME="${{ steps.payload.outputs.file_name }}"
+          mkdir -p /tmp/file-payload
+
+          # If running on the same host as Spring Boot:
+          cp /app/uploads/final/"$FILE_NAME" /tmp/file-payload/ 2>/dev/null || \
+          # Or if using a shared volume in Kubernetes:
+          cp /mnt/uploads/final/"$FILE_NAME" /tmp/file-payload/ 2>/dev/null || \
+          echo "WARNING: file not found on local paths. Adjust this step for your deployment."
+
+      - name: Clone private storage repository
+        run: |
+          git clone https://x-access-token:${{ secrets.STORAGE_REPO_TOKEN }}@github.com/${{ secrets.STORAGE_REPO_OWNER }}/${{ secrets.STORAGE_REPO_NAME }}.git /tmp/storage-repo
+
+      - name: Organise file by date and copy into repo
+        run: |
+          FILE_NAME="${{ steps.payload.outputs.file_name }}"
+          DATE_FOLDER=$(date +'%Y/%m/%d')
+          DEST_DIR="/tmp/storage-repo/uploads/$DATE_FOLDER"
+          mkdir -p "$DEST_DIR"
+          cp /tmp/file-payload/"$FILE_NAME" "$DEST_DIR/"
+          echo "Copied $FILE_NAME → $DEST_DIR/"
+
+      - name: Commit and push to storage repository
+        run: |
+          FILE_NAME="${{ steps.payload.outputs.file_name }}"
+          cd /tmp/storage-repo
+
+          git config user.email "ci-bot@upload-system.local"
+          git config user.name  "Upload System CI Bot"
+
+          git add .
+          git diff --cached --quiet && echo "Nothing to commit" && exit 0
+
+          git commit -m "📦 Upload: $FILE_NAME [$(date +'%Y-%m-%d %H:%M:%S UTC')]
+
+          Triggered by: ${{ github.event_name }}
+          SHA: ${{ github.sha }}"
+
+          git push origin main
+
+      - name: Post-upload cleanup (optional)
+        run: |
+          FILE_NAME="${{ steps.payload.outputs.file_name }}"
+          # Uncomment to remove file from server after successfully saving to GitHub:
+          # rm -f /app/uploads/final/"$FILE_NAME"
+          echo "File $FILE_NAME safely archived to GitHub storage repo."
