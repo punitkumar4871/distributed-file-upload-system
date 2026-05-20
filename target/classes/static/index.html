@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChunkFlow — Distributed File Upload</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /* ── CSS Variables ── */
+    :root {
+      --bg:        #0a0a0f;
+      --surface:   #111118;
+      --border:    #1e1e2e;
+      --accent:    #7c3aed;
+      --accent2:   #06b6d4;
+      --accent3:   #f59e0b;
+      --text:      #e2e8f0;
+      --muted:     #64748b;
+      --success:   #10b981;
+      --error:     #ef4444;
+      --glow:      rgba(124, 58, 237, 0.35);
+      --glow2:     rgba(6, 182, 212, 0.2);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Syne', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Background grid ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(124,58,237,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(124,58,237,0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Ambient orbs */
+    body::after {
+      content: '';
+      position: fixed;
+      top: -200px; right: -200px;
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(124,58,237,0.12) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ── */
+    .wrapper {
+      position: relative;
+      z-index: 1;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 56px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 0 20px var(--glow);
+    }
+
+    .logo-text {
+      font-size: 1.4rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+
+    .logo-text span { color: var(--accent2); }
+
+    .status-pill {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      padding: 4px 12px;
+      border-radius: 20px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: var(--success);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+
+    /* ── Config Bar ── */
+    .config-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+    }
+
+    .config-item {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .config-item label {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .config-item input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .config-item input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(124,58,237,0.1);
+    }
+
+    /* ── Drop Zone ── */
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 16px;
+      padding: 64px 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+      background: var(--surface);
+      margin-bottom: 28px;
+    }
+
+    .drop-zone::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, rgba(124,58,237,0.05) 0%, transparent 70%);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 40px rgba(124,58,237,0.15), 0 0 0 1px rgba(124,58,237,0.2);
+    }
+
+    .drop-zone:hover::before, .drop-zone.drag-over::before {
+      opacity: 1;
+    }
+
+    .drop-zone.drag-over {
+      border-style: solid;
+      background: rgba(124,58,237,0.05);
+    }
+
+    .drop-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      display: block;
+      filter: grayscale(0.3);
+      transition: transform 0.3s;
+    }
+
+    .drop-zone:hover .drop-icon { transform: scale(1.1) translateY(-4px); }
+
+    .drop-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .drop-subtitle {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .drop-subtitle strong { color: var(--accent2); }
+
+    #fileInput { display: none; }
+
+    /* ── File Info Card ── */
+    .file-card {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 24px;
+      animation: slideIn 0.3s ease;
+    }
+
+    .file-card.visible { display: flex; align-items: center; gap: 16px; }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .file-icon-wrap {
+      width: 48px; height: 48px;
+      background: linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem;
+      flex-shrink: 0;
+      border: 1px solid var(--border);
+    }
+
+    .file-meta { flex: 1; }
+
+    .file-name {
+      font-weight: 700;
+      font-size: 0.95rem;
+      margin-bottom: 4px;
+      word-break: break-all;
+    }
+
+    .file-details {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+
+    .file-details span {
+      background: rgba(100, 116, 139, 0.12);
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-right: 6px;
+    }
+
+    .remove-btn {
+      background: none;
+      border: 1px solid rgba(239,68,68,0.3);
+      color: var(--error);
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: all 0.2s;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    .remove-btn:hover {
+      background: rgba(239,68,68,0.1);
+      border-color: var(--error);
+    }
+
+    /* ── Upload Button ── */
+    .upload-btn {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, var(--accent), #5b21b6);
+      border: none;
+      border-radius: 12px;
+      color: white;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: all 0.3s;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(124,58,237,0.3);
+      margin-bottom: 32px;
+    }
+
+    .upload-btn::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, transparent, rgba(255,255,255,0.1));
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .upload-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(124,58,237,0.45);
+    }
+
+    .upload-btn:hover::after { opacity: 1; }
+
+    .upload-btn:active:not(:disabled) { transform: translateY(0); }
+
+    .upload-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── Progress Section ── */
+    .progress-section {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 28px;
+      animation: slideIn 0.3s ease;
+    }
+
+    .progress-section.visible { display: block; }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 16px;
+    }
+
+    .progress-label {
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    .progress-pct {
+      font-family: 'Space Mono', monospace;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--accent2);
+    }
+
+    .progress-bar-track {
+      background: var(--border);
+      border-radius: 100px;
+      height: 8px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 100px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      width: 0%;
+      transition: width 0.4s ease;
+      position: relative;
+    }
+
+    .progress-bar-fill::after {
+      content: '';
+      position: absolute;
+      right: 0; top: 0; bottom: 0;
+      width: 60px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3));
+      animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 0; }
+    }
+
+    .progress-info {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+
+    /* ── Chunk Visualizer ── */
+    .chunks-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    .chunk-box {
+      width: 18px; height: 18px;
+      border-radius: 3px;
+      background: var(--border);
+      transition: all 0.3s ease;
+      position: relative;
+    }
+
+    .chunk-box.uploading {
+      background: rgba(245, 158, 11, 0.6);
+      box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+      animation: chunkPulse 0.8s infinite alternate;
+    }
+
+    .chunk-box.done {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      box-shadow: 0 0 4px var(--glow2);
+    }
+
+    @keyframes chunkPulse {
+      from { opacity: 0.5; } to { opacity: 1; }
+    }
+
+    /* ── Log Terminal ── */
+    .log-terminal {
+      background: #080810;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 28px;
+    }
+
+    .terminal-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .term-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+    }
+    .term-dot.r { background: #ef4444; }
+    .term-dot.y { background: #f59e0b; }
+    .term-dot.g { background: #10b981; }
+
+    .terminal-title {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-left: 4px;
+    }
+
+    .terminal-body {
+      padding: 16px;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.72rem;
+      line-height: 1.7;
+      max-height: 200px;
+      overflow-y: auto;
+      color: #94a3b8;
+    }
+
+    .terminal-body::-webkit-scrollbar { width: 4px; }
+    .terminal-body::-webkit-scrollbar-track { background: transparent; }
+    .terminal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .log-line { margin-bottom: 2px; }
+    .log-line.info  .log-prefix { color: var(--accent2); }
+    .log-line.ok    .log-prefix { color: var(--success); }
+    .log-line.warn  .log-prefix { color: var(--accent3); }
+    .log-line.error .log-prefix { color: var(--error); }
+    .log-prefix { margin-right: 8px; }
+
+    /* ── Result Card ── */
+    .result-card {
+      display: none;
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 28px;
+      animation: slideIn 0.4s ease;
+      border: 1px solid;
+    }
+
+    .result-card.success {
+      display: block;
+      background: rgba(16, 185, 129, 0.05);
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+
+    .result-card.error-card {
+      display: block;
+      background: rgba(239, 68, 68, 0.05);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .result-title {
+      font-weight: 800;
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .result-card.success .result-title { color: var(--success); }
+    .result-card.error-card .result-title { color: var(--error); }
+
+    .result-detail {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      background: rgba(16,185,129,0.15);
+      border: 1px solid rgba(16,185,129,0.4);
+      color: var(--success);
+      border-radius: 8px;
+      text-decoration: none;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 700;
+      transition: all 0.2s;
+    }
+
+    .download-btn:hover {
+      background: rgba(16,185,129,0.25);
+      transform: translateY(-1px);
+    }
+
+    /* ── Stats Row ── */
+    .stats-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+
+    .stat-box {
+      flex: 1;
+      min-width: 120px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-family: 'Space Mono', monospace;
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--accent2);
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── How It Works ── */
+    .how-it-works {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+    }
+
+    .section-title {
+      font-size: 0.7rem;
+      font-family: 'Space Mono', monospace;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 20px;
+    }
+
+    .flow-steps {
+      display: flex;
+      gap: 0;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .flow-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 80px;
+    }
+
+    .step-icon {
+      width: 44px; height: 44px;
+      border-radius: 12px;
+      background: rgba(124,58,237,0.1);
+      border: 1px solid rgba(124,58,237,0.3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem;
+      transition: all 0.3s;
+    }
+
+    .flow-step:hover .step-icon {
+      background: rgba(124,58,237,0.2);
+      transform: translateY(-3px);
+      box-shadow: 0 4px 16px rgba(124,58,237,0.2);
+    }
+
+    .step-label {
+      font-size: 0.65rem;
+      color: var(--muted);
+      text-align: center;
+      font-family: 'Space Mono', monospace;
+      line-height: 1.3;
+    }
+
+    .flow-arrow {
+      color: var(--border);
+      font-size: 1.2rem;
+      margin: 0 4px;
+      padding-bottom: 20px;
+      flex-shrink: 0;
+    }
+
+    @media (max-width: 600px) {
+      .flow-arrow { display: none; }
+      .flow-step { min-width: 60px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+
+    <!-- Header -->
+    <header>
+      <div class="logo">
+        <div class="logo-icon">⚡</div>
+        <div class="logo-text">Chunk<span>Flow</span></div>
+      </div>
+      <div class="status-pill">
+        <div class="status-dot"></div>
+        SYSTEM ONLINE
+      </div>
+    </header>
+
+    <!-- Config Bar -->
+    <div class="config-bar">
+      <div class="config-item">
+        <label>API Base URL</label>
+        <input type="text" id="apiUrl" value="http://localhost:8080/api" />
+      </div>
+      <div class="config-item">
+        <label>Chunk Size</label>
+        <input type="text" id="chunkSizeLabel" value="1 MB" readonly
+               style="cursor:default; color:var(--muted)" />
+      </div>
+    </div>
+
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+      <span class="drop-icon">📦</span>
+      <div class="drop-title">Drop your file here</div>
+      <div class="drop-subtitle">
+        Click to browse &nbsp;·&nbsp; Any file type &nbsp;·&nbsp;
+        <strong>Unlimited size</strong> via chunked upload
+      </div>
+      <input type="file" id="fileInput" />
+    </div>
+
+    <!-- File Info Card -->
+    <div class="file-card" id="fileCard">
+      <div class="file-icon-wrap" id="fileIconWrap">📄</div>
+      <div class="file-meta">
+        <div class="file-name" id="fileName">—</div>
+        <div class="file-details" id="fileDetails"></div>
+      </div>
+      <button class="remove-btn" id="removeBtn" title="Remove file">✕</button>
+    </div>
+
+    <!-- Upload Button -->
+    <button class="upload-btn" id="uploadBtn" disabled>
+      ⚡ &nbsp; Start Chunked Upload
+    </button>
+
+    <!-- Stats Row -->
+    <div class="stats-row">
+      <div class="stat-box">
+        <div class="stat-value" id="statChunks">—</div>
+        <div class="stat-label">Total Chunks</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="statDone">—</div>
+        <div class="stat-label">Uploaded</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="statSpeed">—</div>
+        <div class="stat-label">Speed</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="statTime">—</div>
+        <div class="stat-label">Elapsed</div>
+      </div>
+    </div>
+
+    <!-- Progress Section -->
+    <div class="progress-section" id="progressSection">
+      <div class="progress-header">
+        <div class="progress-label" id="progressLabel">Uploading chunks...</div>
+        <div class="progress-pct" id="progressPct">0%</div>
+      </div>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progressBar"></div>
+      </div>
+      <div class="progress-info" id="progressInfo">Preparing...</div>
+      <!-- Chunk visualizer -->
+      <div class="chunks-grid" id="chunksGrid"></div>
+    </div>
+
+    <!-- Result Card -->
+    <div class="result-card" id="resultCard">
+      <div class="result-title" id="resultTitle"></div>
+      <div class="result-detail" id="resultDetail"></div>
+      <a class="download-btn" id="downloadLink" href="#" style="display:none">
+        ⬇ &nbsp; Download File
+      </a>
+    </div>
+
+    <!-- Log Terminal -->
+    <div class="log-terminal">
+      <div class="terminal-header">
+        <div class="term-dot r"></div>
+        <div class="term-dot y"></div>
+        <div class="term-dot g"></div>
+        <div class="terminal-title">upload-system · logs</div>
+      </div>
+      <div class="terminal-body" id="logBody">
+        <div class="log-line info"><span class="log-prefix">[INFO]</span>ChunkFlow ready. Select a file to begin.</div>
+      </div>
+    </div>
+
+    <!-- How It Works -->
+    <div class="how-it-works">
+      <div class="section-title">// How It Works</div>
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="step-icon">📂</div>
+          <div class="step-label">Select<br/>File</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="step-icon">✂️</div>
+          <div class="step-label">Split into<br/>1 MB Chunks</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="step-icon">📡</div>
+          <div class="step-label">Upload<br/>Sequentially</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="step-icon">🔗</div>
+          <div class="step-label">Server<br/>Merges</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="step-icon">🗑️</div>
+          <div class="step-label">Temp<br/>Cleaned</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="step-icon">⬇️</div>
+          <div class="step-label">Ready to<br/>Download</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ──────────────────────────────────────────────────────────────── -->
+  <!-- JavaScript Logic -->
+  <!-- ──────────────────────────────────────────────────────────────── -->
+  <script>
+    // ── Config ──────────────────────────────────────────────────────────────
+    const CHUNK_SIZE = 1024 * 1024; // 1 MB
+
+    // ── State ────────────────────────────────────────────────────────────────
+    let selectedFile = null;
+    let uploadStartTime = null;
+    let timerInterval = null;
+
+    // ── DOM Refs ──────────────────────────────────────────────────────────────
+    const dropZone      = document.getElementById('dropZone');
+    const fileInput     = document.getElementById('fileInput');
+    const fileCard      = document.getElementById('fileCard');
+    const fileNameEl    = document.getElementById('fileName');
+    const fileDetailsEl = document.getElementById('fileDetails');
+    const fileIconWrap  = document.getElementById('fileIconWrap');
+    const removeBtn     = document.getElementById('removeBtn');
+    const uploadBtn     = document.getElementById('uploadBtn');
+    const progressSection = document.getElementById('progressSection');
+    const progressBar   = document.getElementById('progressBar');
+    const progressPct   = document.getElementById('progressPct');
+    const progressLabel = document.getElementById('progressLabel');
+    const progressInfo  = document.getElementById('progressInfo');
+    const chunksGrid    = document.getElementById('chunksGrid');
+    const resultCard    = document.getElementById('resultCard');
+    const resultTitle   = document.getElementById('resultTitle');
+    const resultDetail  = document.getElementById('resultDetail');
+    const downloadLink  = document.getElementById('downloadLink');
+    const logBody       = document.getElementById('logBody');
+    const statChunks    = document.getElementById('statChunks');
+    const statDone      = document.getElementById('statDone');
+    const statSpeed     = document.getElementById('statSpeed');
+    const statTime      = document.getElementById('statTime');
+    const apiUrlInput   = document.getElementById('apiUrl');
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function generateFileId() {
+      return Math.random().toString(36).substr(2, 9) +
+             Date.now().toString(36);
+    }
+
+    function getFileIcon(fileName) {
+      const ext = fileName.split('.').pop().toLowerCase();
+      const icons = {
+        pdf: '📕', mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬',
+        mp3: '🎵', wav: '🎵', flac: '🎵',
+        jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', webp: '🖼️',
+        zip: '📦', rar: '📦', tar: '📦', gz: '📦',
+        js: '⚡', ts: '⚡', py: '🐍', java: '☕', go: '🔵',
+        doc: '📝', docx: '📝', txt: '📄', md: '📄',
+        xls: '📊', xlsx: '📊', csv: '📊',
+      };
+      return icons[ext] || '📄';
+    }
+
+    function log(msg, type = 'info') {
+      const line = document.createElement('div');
+      line.className = `log-line ${type}`;
+      const now = new Date();
+      const ts = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+      const prefixes = { info: '[INFO]', ok: '[✓ OK]', warn: '[WARN]', error: '[ERR!]' };
+      line.innerHTML = `<span class="log-prefix">${prefixes[type]}</span><span style="color:var(--muted);margin-right:8px">${ts}</span>${msg}`;
+      logBody.appendChild(line);
+      logBody.scrollTop = logBody.scrollHeight;
+    }
+
+    // ── File Selection ────────────────────────────────────────────────────────
+
+    function handleFileSelect(file) {
+      selectedFile = file;
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+      // Update file card
+      fileIconWrap.textContent = getFileIcon(file.name);
+      fileNameEl.textContent = file.name;
+      fileDetailsEl.innerHTML = `
+        <span>${formatBytes(file.size)}</span>
+        <span>${totalChunks} chunks</span>
+        <span>${file.type || 'unknown type'}</span>
+      `;
+      fileCard.classList.add('visible');
+
+      // Update stats
+      statChunks.textContent = totalChunks;
+      statDone.textContent = '0';
+      statSpeed.textContent = '—';
+      statTime.textContent = '0s';
+
+      // Enable upload button
+      uploadBtn.disabled = false;
+
+      // Reset result/progress
+      resultCard.className = 'result-card';
+      progressSection.classList.remove('visible');
+
+      log(`File selected: ${file.name} (${formatBytes(file.size)}, ${totalChunks} chunks)`, 'info');
+    }
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => {
+      if (e.target.files[0]) handleFileSelect(e.target.files[0]);
+    });
+
+    dropZone.addEventListener('dragover', e => {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('drag-over');
+    });
+
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files[0]) handleFileSelect(e.dataTransfer.files[0]);
+    });
+
+    removeBtn.addEventListener('click', () => {
+      selectedFile = null;
+      fileCard.classList.remove('visible');
+      fileInput.value = '';
+      uploadBtn.disabled = true;
+      progressSection.classList.remove('visible');
+      resultCard.className = 'result-card';
+      statChunks.textContent = '—';
+      statDone.textContent = '—';
+      statSpeed.textContent = '—';
+      statTime.textContent = '—';
+      log('File removed.', 'warn');
+    });
+
+    // ── Upload Logic ──────────────────────────────────────────────────────────
+
+    uploadBtn.addEventListener('click', startUpload);
+
+    async function startUpload() {
+      if (!selectedFile) return;
+
+      const apiBase    = apiUrlInput.value.trim().replace(/\/$/, '');
+      const file       = selectedFile;
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const fileId     = generateFileId();
+
+      log(`Starting upload — fileId: ${fileId}`, 'info');
+      log(`Total chunks: ${totalChunks} × 1 MB`, 'info');
+
+      // UI: disable controls
+      uploadBtn.disabled = true;
+      removeBtn.disabled = true;
+      progressSection.classList.add('visible');
+      resultCard.className = 'result-card';
+
+      // Build chunk visualizer
+      chunksGrid.innerHTML = '';
+      const chunkBoxes = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const box = document.createElement('div');
+        box.className = 'chunk-box';
+        box.title = `Chunk ${i}`;
+        chunksGrid.appendChild(box);
+        chunkBoxes.push(box);
+      }
+
+      // Start timer
+      uploadStartTime = Date.now();
+      timerInterval = setInterval(() => {
+        const elapsed = ((Date.now() - uploadStartTime) / 1000).toFixed(0);
+        statTime.textContent = elapsed + 's';
+      }, 500);
+
+      let uploadedCount = 0;
+
+      // ── Upload each chunk sequentially ──
+      try {
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end   = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk = file.slice(start, end);
+
+          // Visualizer: mark as uploading
+          chunkBoxes[i].classList.add('uploading');
+
+          progressLabel.textContent = `Uploading chunk ${i + 1} of ${totalChunks}…`;
+          progressInfo.textContent  = `chunk_${i} · ${formatBytes(chunk.size)} · fileId: ${fileId}`;
+
+          const formData = new FormData();
+          formData.append('fileId',      fileId);
+          formData.append('chunkIndex',  i);
+          formData.append('totalChunks', totalChunks);
+          formData.append('fileName',    file.name);
+          formData.append('chunkData',   chunk, file.name);
+
+          const res = await fetch(`${apiBase}/upload/chunk`, {
+            method: 'POST',
+            body:   formData,
+          });
+
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Chunk ${i} failed: HTTP ${res.status} — ${errText}`);
+          }
+
+          // Visualizer: mark as done
+          chunkBoxes[i].classList.remove('uploading');
+          chunkBoxes[i].classList.add('done');
+
+          uploadedCount++;
+          const pct = Math.round((uploadedCount / totalChunks) * 100);
+          progressBar.style.width = pct + '%';
+          progressPct.textContent  = pct + '%';
+
+          // Update stats
+          statDone.textContent = uploadedCount;
+          const elapsed = (Date.now() - uploadStartTime) / 1000;
+          const bytesUploaded = uploadedCount * CHUNK_SIZE;
+          const speed = bytesUploaded / elapsed;
+          statSpeed.textContent = formatBytes(speed) + '/s';
+
+          log(`Chunk ${i} uploaded (${formatBytes(chunk.size)})`, 'ok');
+        }
+
+        // ── All chunks done — trigger merge ──
+        progressLabel.textContent = 'Merging chunks on server…';
+        progressInfo.textContent  = 'POST /upload/merge/' + fileId;
+        log(`All ${totalChunks} chunks uploaded. Triggering merge…`, 'info');
+
+        const mergeRes = await fetch(
+          `${apiBase}/upload/merge/${fileId}?fileName=${encodeURIComponent(file.name)}`,
+          { method: 'POST' }
+        );
+
+        if (!mergeRes.ok) {
+          const errText = await mergeRes.text();
+          throw new Error(`Merge failed: HTTP ${mergeRes.status} — ${errText}`);
+        }
+
+        const mergeData = await mergeRes.json();
+        const totalTime = ((Date.now() - uploadStartTime) / 1000).toFixed(1);
+
+        progressBar.style.width = '100%';
+        progressPct.textContent  = '100%';
+        progressLabel.textContent = '✓ Upload complete!';
+        progressInfo.textContent  = `Merged in ${totalTime}s`;
+
+        log(`File merged successfully: ${file.name}`, 'ok');
+        log(`Total time: ${totalTime}s`, 'ok');
+
+        // Show success result
+        resultCard.className = 'result-card success';
+        resultTitle.textContent = '✓ Upload Successful';
+        resultDetail.innerHTML  = `
+          File: <strong style="color:var(--text)">${file.name}</strong> &nbsp;·&nbsp;
+          Size: ${formatBytes(file.size)} &nbsp;·&nbsp;
+          Chunks: ${totalChunks} &nbsp;·&nbsp;
+          Time: ${totalTime}s
+        `;
+
+        const downloadUrl = mergeData.data?.downloadUrl || `/api/download/${file.name}`;
+        downloadLink.href = apiBase.replace('/api', '') + downloadUrl;
+        downloadLink.style.display = 'inline-flex';
+
+      } catch (err) {
+        log(`Upload error: ${err.message}`, 'error');
+        resultCard.className = 'result-card error-card';
+        resultTitle.textContent = '✗ Upload Failed';
+        resultDetail.textContent = err.message;
+        downloadLink.style.display = 'none';
+        progressLabel.textContent = 'Upload failed';
+      } finally {
+        clearInterval(timerInterval);
+        uploadBtn.disabled = false;
+        removeBtn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
