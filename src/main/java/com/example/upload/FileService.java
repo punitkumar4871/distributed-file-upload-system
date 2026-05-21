@@ -74,7 +74,8 @@ public class FileService {
         deleteTemp(fileId);
 
         // ── Trigger GitHub file-storage workflow ──────────────────────────
-        gitService.triggerFileStorageWorkflow(fileName);
+        gitService.pushFileToGitHub(fileName);
+
 
         return outputFile.toAbsolutePath().toString();
     }
