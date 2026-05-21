@@ -31,7 +31,7 @@ public class GitService {
     private String finalDir;
 
     // GitHub Contents API hard limit is ~25MB per request — use 20MB to be safe
-    private static final long MAX_CHUNK_BYTES = 20 * 1024 * 1024; // 20MB
+    private static final long MAX_CHUNK_BYTES = 20L * 1024 * 1024; // 20MB
 
     private static final String CONTENTS_URL =
             "https://api.github.com/repos/%s/%s/contents/%s";
@@ -65,7 +65,7 @@ public class GitService {
             if (fileSize <= MAX_CHUNK_BYTES) {
                 pushSingleFile(filePath, fileName, dateFolder);
             } else {
-                pushInParts(filePath, fileName, dateFolder);
+                pushInParts(filePath, fileName, dateFolder, fileSize);
             }
 
         } catch (Exception e) {
@@ -97,10 +97,28 @@ public class GitService {
     }
 
     // ── LARGE FILE: split into 20MB parts ────────────────────────────────────
+    //
+    // FIX 1: Accept fileSize as a long parameter so we never call
+    //        Files.size() twice and avoid int-overflow on allBytes.length.
+    //
+    // FIX 2: Use long arithmetic throughout the loop.  The original code
+    //        cast (i * MAX_CHUNK_BYTES) to int — fine for small i, but the
+    //        intent is to support files well above 2 GB in the future.
+    //
+    // FIX 3: Read each part directly from the file channel instead of loading
+    //        the entire file into a single byte[] first.  A 50 MB file fits
+    //        in RAM easily, but this pattern is correct for large files and
+    //        eliminates the heap-pressure that was causing the JVM to silently
+    //        abort the loop mid-way on memory-constrained containers.
+    //
+    // FIX 4: Manifest is pushed ONLY after ALL parts succeed.  In the
+    //        original code the manifest was pushed unconditionally even when
+    //        some parts had failed — the receiving pipeline's scan_uploads.py
+    //        would then see the manifest arrive before the last part(s),
+    //        triggering the workflow too early and reporting an incomplete set.
 
-    private void pushInParts(Path filePath, String fileName, String dateFolder) throws Exception {
-        byte[] allBytes = Files.readAllBytes(filePath);
-        int totalParts = (int) Math.ceil((double) allBytes.length / MAX_CHUNK_BYTES);
+    private void pushInParts(Path filePath, String fileName, String dateFolder, long fileSize) throws Exception {
+        int totalParts = (int) Math.ceil((double) fileSize / MAX_CHUNK_BYTES);
 
         System.out.println("[GitService] Splitting into " + totalParts + " x 20MB parts...");
 
@@ -110,45 +128,65 @@ public class GitService {
                 ? fileName.substring(fileName.lastIndexOf('.')) : "";
 
         int success = 0;
-        for (int i = 0; i < totalParts; i++) {
-            int from = (int) (i * MAX_CHUNK_BYTES);
-            int to   = (int) Math.min(from + MAX_CHUNK_BYTES, allBytes.length);
-            byte[] chunk = new byte[to - from];
-            System.arraycopy(allBytes, from, chunk, 0, chunk.length);
 
-            String partName   = sanitizePath(baseName)
-                    + ".part" + String.format("%03d", i + 1)
-                    + "of" + totalParts + ext;
-            String repoPath   = "uploads/" + dateFolder + "/" + partName;
-            String base64     = Base64.getEncoder().encodeToString(chunk);
-            String commitMsg  = "Upload part " + (i + 1) + "/" + totalParts + ": " + fileName;
+        try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(filePath.toFile(), "r")) {
 
-            System.out.printf("[GitService] Part %d/%d (%s) → %s%n",
-                    i + 1, totalParts, formatSize(chunk.length), partName);
+            for (int i = 0; i < totalParts; i++) {
+                long from      = (long) i * MAX_CHUNK_BYTES;
+                long to        = Math.min(from + MAX_CHUNK_BYTES, fileSize);
+                int  chunkLen  = (int) (to - from);
+                byte[] chunk   = new byte[chunkLen];
 
-            int status = putFile(repoPath, base64, commitMsg);
+                raf.seek(from);
+                int bytesRead = raf.read(chunk, 0, chunkLen);
+                if (bytesRead != chunkLen) {
+                    System.err.printf("[GitService]   Part %d/%d: expected %d bytes but read %d — aborting%n",
+                            i + 1, totalParts, chunkLen, bytesRead);
+                    return;
+                }
 
-            if (status == 201) {
-                System.out.println("[GitService]   committed OK");
-                success++;
-            } else if (status == 422) {
-                // File already exists from a previous failed attempt — update it
-                System.out.println("[GitService]   already exists — updating...");
-                boolean updated = upsertFile(repoPath, base64, fileName);
-                if (updated) success++;
-            } else {
-                System.err.println("[GitService]   FAILED HTTP " + status);
+                String partName  = sanitizePath(baseName)
+                        + ".part" + String.format("%03d", i + 1)
+                        + "of" + totalParts + ext;
+                String repoPath  = "uploads/" + dateFolder + "/" + partName;
+                String base64    = Base64.getEncoder().encodeToString(chunk);
+                String commitMsg = "Upload part " + (i + 1) + "/" + totalParts + ": " + fileName;
+
+                System.out.printf("[GitService] Part %d/%d (%s) → %s%n",
+                        i + 1, totalParts, formatSize(chunkLen), partName);
+
+                int status = putFile(repoPath, base64, commitMsg);
+
+                if (status == 201) {
+                    System.out.println("[GitService]   committed OK");
+                    success++;
+                } else if (status == 422) {
+                    System.out.println("[GitService]   already exists — updating...");
+                    boolean updated = upsertFile(repoPath, base64, fileName);
+                    if (updated) success++;
+                } else {
+                    System.err.println("[GitService]   FAILED HTTP " + status);
+                    // Do NOT push the manifest if a part failed — the receiving
+                    // pipeline needs ALL parts present before it merges.
+                }
+
+                Thread.sleep(500); // slightly longer delay — avoids secondary rate limit
             }
-
-            Thread.sleep(300); // small delay to avoid rate limiting
         }
 
-        // Push manifest so user knows how to reassemble
-        pushManifest(fileName, dateFolder, totalParts, allBytes.length);
-
         System.out.println("[GitService] Result: " + success + "/" + totalParts + " parts committed.");
-        System.out.println("[GitService] Repo:   https://github.com/" + repoOwner + "/"
-                + repoName + "/tree/main/uploads/" + dateFolder);
+
+        // FIX 4: Only push the manifest when every part was committed successfully.
+        // If even one part failed, skip the manifest so scan_uploads.py does not
+        // see a manifest without all its parts and report a broken/incomplete group.
+        if (success == totalParts) {
+            pushManifest(fileName, dateFolder, totalParts, fileSize);
+            System.out.println("[GitService] Repo: https://github.com/" + repoOwner + "/"
+                    + repoName + "/tree/main/uploads/" + dateFolder);
+        } else {
+            System.err.println("[GitService] WARNING: " + (totalParts - success)
+                    + " part(s) failed — manifest NOT pushed. Re-upload to retry.");
+        }
     }
 
     // ── MANIFEST ─────────────────────────────────────────────────────────────
@@ -181,6 +219,8 @@ public class GitService {
                 System.out.println("[GitService] Manifest committed.");
             } else if (status == 422) {
                 upsertFile(repoPath, base64, fileName + ".manifest.txt");
+            } else {
+                System.err.println("[GitService] Manifest push failed HTTP " + status);
             }
         } catch (Exception e) {
             System.err.println("[GitService] Manifest error: " + e.getMessage());
